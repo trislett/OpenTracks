@@ -51,6 +51,7 @@ import de.dennisguse.opentracks.content.provider.CustomContentProvider;
 import de.dennisguse.opentracks.content.provider.TrackPointIterator;
 import de.dennisguse.opentracks.content.sensor.SensorDataSet;
 import de.dennisguse.opentracks.services.sensors.BluetoothRemoteSensorManager;
+import de.dennisguse.opentracks.services.sensors.ElevationSumManager;
 import de.dennisguse.opentracks.services.tasks.AnnouncementPeriodicTaskFactory;
 import de.dennisguse.opentracks.services.tasks.PeriodicTaskExecutor;
 import de.dennisguse.opentracks.stats.TrackStatistics;
@@ -137,6 +138,7 @@ public class TrackRecordingService extends Service {
     // The following variables are set when recording:
     private WakeLock wakeLock;
     private BluetoothRemoteSensorManager remoteSensorManager;
+    private ElevationSumManager elevationSumManager;
 
     private TrackStatisticsUpdater trackStatisticsUpdater;
     private TrackPoint lastTrackPoint;
@@ -203,6 +205,11 @@ public class TrackRecordingService extends Service {
         if (remoteSensorManager != null) {
             remoteSensorManager.stop();
             remoteSensorManager = null;
+        }
+
+        if (elevationSumManager != null) {
+            elevationSumManager.stop(this);
+            elevationSumManager = null;
         }
 
         // Reverse order from onCreate
@@ -411,6 +418,10 @@ public class TrackRecordingService extends Service {
         // Update instance variables
         remoteSensorManager = new BluetoothRemoteSensorManager(this);
         remoteSensorManager.start();
+
+        elevationSumManager = new ElevationSumManager();
+        elevationSumManager.start(this);
+
         lastTrackPoint = null;
         isIdle = false;
 
@@ -496,6 +507,11 @@ public class TrackRecordingService extends Service {
             remoteSensorManager.stop();
             remoteSensorManager = null;
         }
+        if (elevationSumManager != null) {
+            elevationSumManager.stop(this);
+            elevationSumManager = null;
+        }
+
         lastTrackPoint = null;
 
         stopGps(trackStopped);
@@ -589,6 +605,10 @@ public class TrackRecordingService extends Service {
             registerLocationListener();
         }
 
+        if (elevationSumManager != null) {
+            trackPoint.setElevationGain(elevationSumManager.getElevationGain_m());
+        }
+
         //Storing trackPoint
 
         // Always insert the first segment location
@@ -612,15 +632,19 @@ public class TrackRecordingService extends Service {
             insertTrackPoint(track, TrackPoint.createPause());
 
             insertTrackPoint(track, trackPoint);
-            isIdle = false;
+            elevationSumManager.reset();
 
+            isIdle = false;
             lastTrackPoint = trackPoint;
             return;
         }
 
         if (trackPoint.hasSensorData() || distanceToLastTrackLocation >= recordingDistanceInterval) {
             insertTrackPointIfNewer(track, lastTrackPoint);
+
             insertTrackPoint(track, trackPoint);
+            elevationSumManager.reset();
+
             isIdle = false;
 
             lastTrackPoint = trackPoint;
@@ -629,7 +653,10 @@ public class TrackRecordingService extends Service {
 
         if (!isIdle && !TrackPointUtils.isMoving(trackPoint)) {
             insertTrackPointIfNewer(track, lastTrackPoint);
+
             insertTrackPoint(track, trackPoint);
+            elevationSumManager.reset();
+
             isIdle = true;
 
             lastTrackPoint = trackPoint;
@@ -638,7 +665,10 @@ public class TrackRecordingService extends Service {
 
         if (isIdle && TrackPointUtils.isMoving(trackPoint)) {
             insertTrackPointIfNewer(track, lastTrackPoint);
+
             insertTrackPoint(track, trackPoint);
+            elevationSumManager.reset();
+
             isIdle = false;
 
             lastTrackPoint = trackPoint;
@@ -712,6 +742,17 @@ public class TrackRecordingService extends Service {
         if (sensorData != null) {
             sensorData.fillTrackPoint(trackPoint);
         }
+    }
+
+    /**
+     * Returns the relative elevation gain (since last trackpoint).
+     */
+    Float getElevationGain_m() {
+        if (elevationSumManager == null || !elevationSumManager.isConnected()) {
+            return null;
+        }
+
+        return elevationSumManager.getElevationGain_m();
     }
 
     private void registerLocationListener() {
